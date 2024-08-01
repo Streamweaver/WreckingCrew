@@ -2,13 +2,61 @@ import os
 import re
 from typing import Optional, Type, Any, List
 from dotenv import load_dotenv
+from functools import partial
 from crewai import Agent, Task, Crew, Process
-from crewai_tools import BaseTool, FileReadTool
+from crewai_tools import BaseTool, FileReadTool, tool
 from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from pydantic.v1 import BaseModel, Field
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Setup some LLMs to choose from.
+def get_sonnet_llm():
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
+    
+    return ChatAnthropic(anthropic_api_key=api_key, model="claude-3-sonnet-20240229", temperature=0)
+
+def get_openai_llm():
+    return ChatOpenAI(
+            model="gpt-4o-mini",  # This is the model name for GPT-4 Turbo
+            temperature=0,
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+            )
+
+# Custom Tools
+
+class CustomFileReadToolSchema(BaseModel):
+    file_path: str = Field(..., description="The path to the file to read, relative to the repository root")
+
+class CustomFileReadTool(BaseTool):
+    name: str = "Read File"
+    description: str = "Reads the content of a file from the repository. Provide the file path relative to the repository root."
+    args_schema: type[BaseModel] = CustomFileReadToolSchema
+    repo_path: str = Field(..., description="The absolute path to the repository root")
+
+    def __init__(self, repo_path: str, **data):
+        super().__init__(repo_path=os.path.abspath(repo_path), **data)
+
+    def _run(self, file_path: str) -> str:
+        full_path = os.path.join(self.repo_path, file_path.lstrip('/'))
+        try:
+            with open(full_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+            return f"Content of {file_path}:\n\n{content}"
+        except FileNotFoundError:
+            return f"Error: File '{file_path}' not found in the repository."
+        except Exception as e:
+            return f"Error reading file '{file_path}': {str(e)}"
+
+    def _generate_description(self) -> None:
+        self.description = (
+            f"Reads the content of a file from the repository at {self.repo_path}. "
+            "Provide the file path relative to the repository root."
+        )
 
 class CustomFixedDirectoryReadToolSchema(BaseModel):
     """Input for DirectoryReadTool."""
@@ -63,58 +111,57 @@ class CustomDirectoryReadTool(BaseTool):
             f"Ignoring subdirectories: {ignore_dirs_str}"
         )
 
-class MarkdownWriterToolSchema(BaseModel):
-    content: str = Field(..., description="The content to be written to markdown files")
-    output_dir: str = Field(..., description="The directory where markdown files will be written")
+@tool
+def write_markdown(content: str, output_dir: str) -> str:
+    """
+    Write the markdown content to files in the specified output directory.
 
+    Args:
+        content (str): The markdown content to be written.
+        output_dir (str): The directory where the markdown files will be written.
 
-class MarkdownWriterTool(BaseTool):
-    name: str = "Markdown Writer"
-    description: str = "Writes content to markdown files with proper UTF-8 encoding"
-    args_schema: type[BaseModel] = MarkdownWriterToolSchema
+    Returns:
+        str: A message indicating the success of the operation.
 
-    def _run(self, content: str, output_dir: str) -> str:
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    Raises:
+        OSError: If the output directory cannot be created.
 
-        # Split content into sections based on ## headings
-        sections = re.split(r'\n##\s', content)
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-        # Write main file
-        main_content = sections[0]
-        with open(os.path.join(output_dir, 'deployment_instructions.md'), 'w', encoding='utf-8') as f:
-            f.write(main_content)
+    # Write main file
+    with open(os.path.join(output_dir, 'deployment_instructions.md'), 'w', encoding='utf-8') as f:
+        f.write(content)
 
-        # Write individual section files
-        for i, section in enumerate(sections[1:], 1):
-            # Extract section title from the first line
-            section_title = section.split('\n')[0].strip()
-            file_name = f"{i:02d}_{section_title.lower().replace(' ', '_')}.md"
-            with open(os.path.join(output_dir, file_name), 'w', encoding='utf-8') as f:
-                f.write(f"## {section}")
+    return f"Deployment instructions have been written to {output_dir}"
 
-        return f"Deployment instructions have been written to {output_dir}"
-
+# Crew Definition
 class DeploymentInstructionsCrew:
     def __init__(self, repo_path, output_dir):
         self.repo_path = repo_path
+        self.output_dir = output_dir
         self.ignore_dirs = ['.git', '.idea', '.vscode', '__pycache__', 'node_modules', 'venv', 'env']
         self.directory_tool = CustomDirectoryReadTool(directory=repo_path, ignore_dirs=self.ignore_dirs)
-        self.file_tool = FileReadTool()
-        self.markdown_writer_tool = MarkdownWriterTool()
-        self.output_dir = output_dir
+        self.file_tool = CustomFileReadTool(repo_path=repo_path)
+        # self.file_tool = FileReadTool()
         
         api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY not found in environment variables")
         
-        self.llm = ChatAnthropic(anthropic_api_key=api_key, model="claude-3-sonnet-20240229", temperature=0)
+        self.llm = get_openai_llm()
 
     def create_agents(self):
+        file_tool_instruction = (
+            "When using the Read File tool, always provide file paths relative to the repository root. "
+            "For example, use 'config/webpack.dev.js' instead of '/config/webpack.dev.js' or './config/webpack.dev.js'."
+        )
+                
         repository_analyzer = Agent(
             role='Repository Analyzer',
             goal='Analyze the structure and contents of the code repository, excluding common IDE and version control directories',
-            backstory=f'You are an expert in software architecture and code analysis. You can quickly understand the structure of a repository and identify key components, while ignoring non-essential directories such as {", ".join(self.ignore_dirs)}.',
+            backstory=f'You are an expert in software architecture and code analysis. You can quickly understand the structure of a repository and identify key components, while ignoring non-essential directories such as {", ".join(self.ignore_dirs)}. {file_tool_instruction}',
             tools=[self.directory_tool, self.file_tool],
             verbose=True,
             llm=self.llm
@@ -123,7 +170,7 @@ class DeploymentInstructionsCrew:
         deployment_specialist = Agent(
             role='Deployment Specialist',
             goal='Identify deployment requirements and best practices',
-            backstory='You are a seasoned DevOps engineer with extensive experience in deploying various types of applications. You understand different deployment strategies and can recommend the best approach based on the application structure.',
+            backstory=f'You are a seasoned DevOps engineer with extensive experience in deploying various types of applications. You understand different deployment strategies and can recommend the best approach based on the application structure. {file_tool_instruction}',
             tools=[self.file_tool],
             verbose=True,
             llm=self.llm
@@ -141,7 +188,7 @@ class DeploymentInstructionsCrew:
             role='Markdown Writer',
             goal='Format and write deployment instructions in markdown files',
             backstory='You are an expert in creating well-structured markdown documents. You can take technical content and format it into clear, organized markdown files.',
-            tools=[self.markdown_writer_tool],
+            tools=[write_markdown],
             verbose=True,
             llm=self.llm
         )
@@ -165,15 +212,15 @@ class DeploymentInstructionsCrew:
         )
 
         write_instructions = Task(
-            description='Create a comprehensive set of deployment instructions based on the repository analysis and identified requirements. Include steps for setting up the environment, deploying the application, and any post-deployment tasks. Organize your output into logical sections, each starting with a level 2 heading (##).',
+            description='Create a comprehensive set of deployment instructions based on the repository analysis and identified requirements. Include steps for setting up the environment, lists of configuration settings, deploying the application, and any post-deployment tasks. Organize your output into logical sections, each starting with a level 2 heading (##).',
             agent=self.create_agents()[2],
-            expected_output='A detailed, step-by-step guide for deploying the application, formatted in Markdown with clear section headings.',
+            expected_output='A detailed, step-by-step guide for deploying the application, including important configuration details and environment variables, formatted in Markdown with clear section headings.',
             context=[analyze_repo, identify_requirements],
             callback=self.task_callback
         )
 
         format_and_save = Task(
-            description=f'Take the deployment instructions, format them properly, and save them as markdown files in {self.output_dir}. Ensure proper UTF-8 encoding and clear organization of content.',
+            description='Take the deployment instructions, format them properly, and save them as markdown files in the specified output directory. Ensure proper UTF-8 encoding and clear organization of content.',
             agent=self.create_agents()[3],
             expected_output='Confirmation that the markdown files have been successfully written with proper formatting and encoding.',
             context=[write_instructions],

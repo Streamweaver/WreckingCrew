@@ -3,6 +3,7 @@
 .vscode
 
 deployment_documentation_crew/output/*.md
+deployment_documentation_crew/deployment_instructions/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
