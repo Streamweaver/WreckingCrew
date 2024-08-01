@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "deployment-documentation-crew"
+version = "0.1.0"
+description = "A multi-agent crew that will attempt to generate deployment instructions for an app based on the repo documents."
+authors = ["Scott Turnbull <streamweaver@gmail.com>"]
+license = "Apache 2.0"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.10,<=3.13"
+crewai = "^0.41.1"
+crewai-tools = "^0.4.26"
+langchain-anthropic = "^0.1.22"
+python-dotenv = "^1.0.1"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
