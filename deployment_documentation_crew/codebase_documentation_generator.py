@@ -20,21 +20,12 @@ def get_llm(model: str, api_key: str, temperature: float = 0):
     else:
         raise ValueError(f"Model {model} not supported.")
 
-# Write a file.
+# Write a file
 def write_utf8_file(output_filepath, content):
-    # Get the current datetime with milliseconds
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    
-    # Split the filepath into directory and filename
     directory, filename = os.path.split(output_filepath)
-    
-    # Split the filename into name and extension
     name, ext = os.path.splitext(filename)
-    
-    # Create the new filename with the datetime
     new_filename = f"{name}_{current_time}{ext}"
-    
-    # Join the directory and new filename
     new_filepath = os.path.join(directory, new_filename)
     
     try:
@@ -69,18 +60,10 @@ class CustomFileReadTool(BaseTool):
         except Exception as e:
             return f"Error reading file '{file_path}': {str(e)}"
 
-    def _generate_description(self) -> None:
-        self.description = (
-            f"Reads the content of a file from the repository at {self.repo_path}. "
-            "Provide the file path relative to the repository root."
-        )
-
 class CustomFixedDirectoryReadToolSchema(BaseModel):
-    """Input for DirectoryReadTool."""
     ignore_dirs: Optional[List[str]] = Field(default=None, description="List of subdirectories to ignore")
 
 class CustomDirectoryReadToolSchema(CustomFixedDirectoryReadToolSchema):
-    """Input for DirectoryReadTool."""
     directory: str = Field(..., description="Mandatory directory to list content")
 
 class CustomDirectoryReadTool(BaseTool):
@@ -99,10 +82,7 @@ class CustomDirectoryReadTool(BaseTool):
             self.args_schema = CustomFixedDirectoryReadToolSchema
             self._generate_description()
 
-    def _run(
-        self,
-        **kwargs: Any,
-    ) -> Any:
+    def _run(self, **kwargs: Any) -> Any:
         directory = kwargs.get('directory', self.directory)
         ignore_dirs = kwargs.get('ignore_dirs', self.ignore_dirs)
         
@@ -111,7 +91,6 @@ class CustomDirectoryReadTool(BaseTool):
         
         files_list = []
         for root, dirs, files in os.walk(directory):
-            # Remove ignored directories
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
             
             for filename in files:
@@ -128,8 +107,8 @@ class CustomDirectoryReadTool(BaseTool):
             f"Ignoring subdirectories: {ignore_dirs_str}"
         )
 
-# Crew Definition
-class DeploymentInstructionsCrew:
+# Codebase Documentation Crew
+class CodebaseDocumentationCrew:
     def __init__(self, repo_path, llm):
         self.repo_path = repo_path
         self.ignore_dirs = ['.git', '.idea', '.vscode', '__pycache__', 'node_modules', 'venv', 'env']
@@ -139,16 +118,16 @@ class DeploymentInstructionsCrew:
         self.llm = llm
 
         # Initialize agent variables
-        self.rpeository_analyzer = None
-        self.deployment_specialist = None
-        self.technical_writer = None
-        self.markdown_writer = None
+        self.repository_analyzer = None
+        self.code_reviewer = None
+        self.documentation_writer = None
+        self.markdown_formatter = None
         
         # Initialize task variables
-        self.analyze_repo = None
-        self.identify_requirements = None
-        self.write_instructions = None
-        self.format_and_save = None
+        self.analyze_repo_structure = None
+        self.review_code_components = None
+        self.write_documentation = None
+        self.format_documentation = None
 
         self.create_agents()
         self.create_tasks()
@@ -156,72 +135,72 @@ class DeploymentInstructionsCrew:
     def create_agents(self):
         file_tool_instruction = (
             "When using the Read File tool, always provide file paths relative to the repository root. "
-            "For example, use 'config/webpack.dev.js' instead of '/config/webpack.dev.js' or './config/webpack.dev.js'."
+            "For example, use 'src/main.py' instead of '/src/main.py' or './src/main.py'."
         )
                 
         self.repository_analyzer = Agent(
             role='Repository Analyzer',
-            goal='Analyze the structure and contents of the code repository, excluding common IDE and version control directories',
-            backstory=f'You are an expert in software architecture and code analysis. You can quickly understand the structure of a repository and identify key components, while ignoring non-essential directories such as {", ".join(self.ignore_dirs)}. {file_tool_instruction}',
+            goal='Analyze the structure and organization of the codebase',
+            backstory=f'You are an expert in software architecture and code organization. You can quickly understand the structure of a repository and identify key components, while ignoring non-essential directories such as {", ".join(self.ignore_dirs)}. {file_tool_instruction}',
             tools=[self.directory_tool, self.file_tool],
             verbose=False,
             llm=self.llm
         )
 
-        self.deployment_specialist = Agent(
-            role='Deployment Specialist',
-            goal='Identify deployment requirements and best practices',
-            backstory=f'You are a seasoned DevOps engineer with extensive experience in deploying various types of applications. You understand different deployment strategies and can recommend the best approach based on the application structure. {file_tool_instruction}',
+        self.code_reviewer = Agent(
+            role='Code Reviewer',
+            goal='Analyze code components and identify main features and functionalities',
+            backstory=f'You are a senior software engineer with extensive experience in code review and analysis. You can quickly understand complex codebases and identify key features, design patterns, and architectural decisions. {file_tool_instruction}',
             tools=[self.file_tool],
             verbose=False,
             llm=self.llm
         )
 
-        self.technical_writer = Agent(
-            role='Technical Writer',
-            goal='Create clear and concise deployment instructions',
-            backstory='You are a skilled technical writer with a background in software development. You can translate complex technical information into easy-to-follow instructions for developers of all skill levels.',
+        self.documentation_writer = Agent(
+            role='Documentation Writer',
+            goal='Create comprehensive and clear documentation for the codebase',
+            backstory='You are a skilled technical writer with a strong background in software development. You can translate complex technical information into clear, concise, and well-structured documentation that is easily understood by developers of all skill levels.',
             verbose=False,
             llm=self.llm
         )
 
-        self.markdown_writer = Agent(
-            role='Markdown Writer',
-            goal='Format deployment instructions in markdown format',
-            backstory='You are an expert in formatting well-structured markdown documents. You can take technical content and format it into clear, organized markdown.',
+        self.markdown_formatter = Agent(
+            role='Markdown Formatter',
+            goal='Format the codebase documentation in proper markdown format',
+            backstory='You are an expert in creating well-structured and visually appealing markdown documents. You can take technical content and format it into clear, organized, and easily navigable markdown documentation.',
             verbose=True,
             llm=self.llm
         )
 
     def create_tasks(self):
-        self.analyze_repo = Task(
-            description=f'Analyze the repository structure at {self.repo_path}. Identify the main components, dependencies, and any configuration files related to deployment. The following directories are being ignored: {", ".join(self.ignore_dirs)}.',
+        self.analyze_repo_structure = Task(
+            description=f'Analyze the repository structure at {self.repo_path}. Identify the main directories, key files, and overall organization of the codebase. The following directories are being ignored: {", ".join(self.ignore_dirs)}.',
             agent=self.repository_analyzer,
-            expected_output='A detailed report on the repository structure, highlighting key components and files relevant to deployment, excluding non-essential directories.',
+            expected_output='A detailed report on the repository structure, highlighting the main components, important files, and overall architecture of the codebase.',
             callback=self.task_callback
         )
 
-        self.identify_requirements = Task(
-            description='Based on the repository analysis, identify the deployment requirements. Consider the type of application, its dependencies, and any specific infrastructure needs.',
-            agent=self.deployment_specialist,
-            expected_output='A list of deployment requirements and recommendations for the best deployment strategy.',
-            context=[self.analyze_repo],
+        self.review_code_components = Task(
+            description='Based on the repository analysis, review the main code components. Identify key features, important classes and functions, design patterns used, and any notable architectural decisions.',
+            agent=self.code_reviewer,
+            expected_output='A comprehensive analysis of the codebase, detailing main features, detailed descriptions of each important component, and architectural insights.',
+            context=[self.analyze_repo_structure],
             callback=self.task_callback
         )
 
-        self.write_instructions = Task(
-            description='Create a comprehensive set of deployment instructions based on the repository analysis and identified requirements. Include steps for setting up the environment, lists of configuration settings, deploying the application, and any post-deployment tasks. Organize your output into logical sections, each starting with a level 2 heading (##).',
-            agent=self.technical_writer,
-            expected_output='A verbose and detailed, step-by-step guide for deploying the application, including important configuration details and environment variables, formatted in Markdown with clear section headings.',
-            context=[self.analyze_repo, self.identify_requirements],
+        self.write_documentation = Task(
+            description='Create comprehensive documentation for the codebase based on the repository analysis and code review. Include an overview of the project structure, detailed explanations of main features and components, usage instructions, and any important technical decisions or patterns used. Organize your output into logical sections, each starting with a level 2 heading (##).',
+            agent=self.documentation_writer,
+            expected_output='A detailed and well-structured documentation of the codebase, including project overview, main features, code organization, and usage instructions, formatted with clear section headings. Also include detailed descirptions of each individual component.',
+            context=[self.analyze_repo_structure, self.review_code_components],
             callback=self.task_callback
         )
 
-        self.format_and_save = Task(
-            description='Take the deployment instructions and format them in proper markdown format.',
-            agent=self.markdown_writer,
-            expected_output='Confirmation that the markdown file has been successfully written with proper formatting and encoding.',
-            context=[self.write_instructions],
+        self.format_documentation = Task(
+            description='Take the codebase documentation and format it in proper markdown format. Ensure the document is well-structured, easily navigable, and visually appealing.',
+            agent=self.markdown_formatter,
+            expected_output='A beautifully formatted markdown file containing the comprehensive codebase documentation.',
+            context=[self.write_documentation],
             callback=self.task_callback
         )
 
@@ -229,21 +208,19 @@ class DeploymentInstructionsCrew:
         pass
 
     def get_all_agents(self):
-        """Return a list of all agents in the crew."""
         return [
             self.repository_analyzer,
-            self.deployment_specialist,
-            self.technical_writer,
-            self.markdown_writer
+            self.code_reviewer,
+            self.documentation_writer,
+            self.markdown_formatter
         ]
 
     def get_all_tasks(self):
-        """Return a list of all tasks in the crew."""
         return [
-            self.analyze_repo,
-            self.identify_requirements,
-            self.write_instructions,
-            self.format_and_save
+            self.analyze_repo_structure,
+            self.review_code_components,
+            self.write_documentation,
+            self.format_documentation
         ]
 
     def run(self):
@@ -260,15 +237,28 @@ class DeploymentInstructionsCrew:
 # Usage
 if __name__ == "__main__":
     repo_path = os.getenv('REPO_PATH', "/path/to/your/repository")
-    output_file = os.getenv('OUTPUT_FILE', "/path/to/output/directory")
+    output_file = os.getenv('OUTPUT_FILE', "/path/to/output/directory/codebase_documentation.md")
     model = os.getenv('LLM_MODEL')
     api_key = os.getenv('LLM_API_KEY')
     temperature = float(os.getenv('LLM_TEMPERATURE', 0))
     llm = get_llm(model, api_key, temperature)
-    deployment_crew = DeploymentInstructionsCrew(repo_path, llm)
-    result = deployment_crew.run()
-    if result.tasks_output and len(result.tasks_output) > 0:
+    documentation_crew = CodebaseDocumentationCrew(repo_path, llm)
+    result = documentation_crew.run()
+
+    # Robust error handling for crew output
+    if hasattr(result, 'tasks_output') and result.tasks_output:
+        # If tasks_output exists and is non-empty, use the last task's output
         last_task_output = result.tasks_output[-1]
-        write_utf8_file(output_file, last_task_output.raw)
-    else:
+        if hasattr(last_task_output, 'raw'):
+            write_utf8_file(output_file, last_task_output.raw)
+        else:
+            write_utf8_file(output_file, str(last_task_output))
+    elif hasattr(result, 'raw'):
+        # If there's no tasks_output but there is a raw attribute, use that
         write_utf8_file(output_file, result.raw)
+    else:
+        # If neither of the above work, convert the entire result to a string
+        write_utf8_file(output_file, str(result))
+
+    print(f"Result type: {type(result)}")
+    print(f"Result attributes: {dir(result)}")
